@@ -5,7 +5,7 @@ import { combineTracks } from './lib/mp4.js';
 
 const CONCURRENCY = 6;
 const MAX_SEGMENTS = 20000;
-const MAX_BYTES = 4 * 1024 ** 3; // 4 GB safety limit against runaway playlists
+const MAX_BYTES = 2 * 1024 ** 3; // 2 GB: everything is held in memory until the file is saved
 const jobs = new Map(); // jobId -> { controller, blobUrl }
 
 function send(msg) {
@@ -101,7 +101,7 @@ async function downloadSegments(playlists, jobId, signal) {
       done++;
       if (Date.now() - lastReport > 300 || done === tasks.length) {
         lastReport = Date.now();
-        send({ type: 'progress', jobId, done, total: tasks.length });
+        send({ type: 'progress', jobId, done, total: tasks.length, bytes });
       }
     }
   };
@@ -147,6 +147,7 @@ async function runHls({ jobId, url }) {
     send({ type: 'progress', jobId, done: 0, total });
     const [videoSegs, audioSegs] = await downloadSegments(playlists, jobId, controller.signal);
     send({ type: 'progress', jobId, done: total, total, status: 'converting' });
+    await new Promise((r) => setTimeout(r, 0)); // let the progress message go out before the busy part
     let parts;
     if (audio) {
       const v = await toFmp4(video, videoSegs, 'video', controller.signal);
@@ -161,17 +162,18 @@ async function runHls({ jobId, url }) {
     jobs.set(jobId, { controller, blobUrl });
     send({ type: 'finished', jobId, blobUrl });
   } catch (err) {
-    jobs.delete(jobId);
     if (!controller.signal.aborted) send({ type: 'failed', jobId, error: String(err?.message || err) });
+    release(jobId);
   }
 }
 
 function release(jobId) {
   const job = jobs.get(jobId);
-  if (!job) return;
-  job.controller.abort();
-  if (job.blobUrl) URL.revokeObjectURL(job.blobUrl);
-  jobs.delete(jobId);
+  if (job) {
+    job.controller.abort();
+    if (job.blobUrl) URL.revokeObjectURL(job.blobUrl);
+    jobs.delete(jobId);
+  }
   if (!jobs.size) setTimeout(() => !jobs.size && window.close(), 1000);
 }
 

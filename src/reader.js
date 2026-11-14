@@ -49,6 +49,29 @@ clean.querySelectorAll('img').forEach((img) => {
 });
 clean.querySelectorAll('video, audio, source, picture > source').forEach((n) => n.remove());
 
+// The headline, author and time are shown above the text already, so drop their copies from the body.
+// Short section labels are dropped only before the first real paragraph.
+let intro = true;
+const repeats = new Set([article.title, article.byline, article.siteName].filter(Boolean).map((s) => s.trim().toLowerCase()));
+for (const node of [...clean.querySelectorAll('h1, h2, p, span, a, time, div')]) {
+  const text = node.textContent.trim();
+  if (text.length > 80 && node.matches('p')) intro = false;
+  if (text.length > 60 || node.querySelector('img') || !clean.contains(node)) continue; // skip text, pictures and removed parts
+  const shortLabel = intro && text.length < 25 && !/[.!?:]$/.test(text) && !text.includes(' ', text.indexOf(' ') + 1);
+  if (!text || repeats.has(text.toLowerCase()) || node.matches('time') || /^\d{1,2}\.\d{1,2}\.(\d{2,4})?\s+\d{1,2}[:.]\d{2}$/.test(text) || (shortLabel && node.matches('span') && node.parentElement?.textContent.trim() === text)) {
+    (node.parentElement?.textContent.trim() === text && node.parentElement !== clean ? node.parentElement : node).remove();
+  }
+}
+
+// Articles whose main picture is a video player have no images left, so use the page's preview image.
+const lead = !clean.querySelector('img') && safeUrl(article.image || '');
+if (lead) {
+  const img = Object.assign(document.createElement('img'), { src: lead, alt: '', referrerPolicy: 'no-referrer', loading: 'eager' });
+  img.onerror = () => img.parentElement?.remove();
+  clean.prepend(Object.assign(document.createElement('figure'), { className: 'lead' }));
+  clean.firstChild.append(img);
+}
+
 // Chrome uses the page title as the suggested PDF file name.
 document.title = buildFileName(article.title, article.url, 'pdf').replace(/\.pdf$/, '');
 document.documentElement.lang = article.lang || 'en';

@@ -6,6 +6,8 @@ export function safeFileName(name, fallback = 'download') {
   let out = String(name ?? '')
     .normalize('NFC')
     .replace(/[\u0000-\u001f\u007f\u00ad\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '') // control, zero-width, bidi, soft hyphen
+    .replace(/\s*:\s+/g, ' - ') // "Headline: quote" -> "Headline - quote"
+    .replace(/([\p{L}\p{N}]):([\p{L}\p{N}])/gu, '$1꞉$2') // "IS:lle" keeps a colon-like letter that file systems allow
     .replace(/[\\/:*?"<>|~]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()

@@ -18,6 +18,11 @@ test('strips path tricks and unsafe characters', () => {
   assert.equal(safeFileName('x'.repeat(500)).length, 120);
 });
 
+test('keeps colons readable', () => {
+  assert.equal(safeFileName('Jessica lähetti videon IS:lle: ”Se on hieno”'), 'Jessica lähetti videon IS\ua789lle - ”Se on hieno”');
+  assert.equal(safeFileName('C:\\Windows'), 'C Windows');
+});
+
 test('cleanTitle keeps the headline', () => {
   assert.equal(cleanTitle('Headline · Site'), 'Headline');
   assert.equal(cleanTitle('No separators here'), 'No separators here');

@@ -7,22 +7,32 @@
   </head>
   <body>
     <header>
-      <img src="../icons/32.png" alt="" width="20" height="20" />
-      <h1>Keepsake</h1>
+      <img src="../icons/32.png" alt="" width="22" height="22" />
+      <div class="brand">
+        <h1>Keepsake</h1>
+        <p id="host"></p>
+      </div>
     </header>
 
-    <section>
+    <section class="card">
       <h2>Article</h2>
-      <div class="row">
+      <div class="actions">
         <button id="pdf" class="primary">Save as PDF</button>
         <button id="png">Save as image</button>
       </div>
     </section>
 
-    <section>
-      <h2>Videos on this page</h2>
-      <ul id="videos"></ul>
-      <p id="empty" class="hint" hidden>No videos yet. Press play on the video, then open Keepsake again.</p>
+    <section class="card">
+      <h2>Videos <span id="count" class="count"></span></h2>
+      <ul id="videos" class="list"></ul>
+      <div id="empty" class="empty" hidden>
+        <p class="lead">No videos found yet</p>
+        <p>Start the video on the page, then open Keepsake again.</p>
+      </div>
+      <details id="more" hidden>
+        <summary></summary>
+        <ul id="others" class="list"></ul>
+      </details>
     </section>
 
     <p id="error" class="error" role="alert" hidden></p>

@@ -99,7 +99,8 @@ function fragments(data) {
   const out = [];
   for (let i = 0; i < list.length; i++) {
     if (list[i].type === 'moof' && list[i + 1]?.type === 'mdat') {
-      out.push([slice(data, list[i]), slice(data, list[i + 1])]);
+      // moof is copied because its track id and sequence are rewritten; mdat is only viewed, to save memory.
+      out.push([slice(data, list[i]), data.subarray(list[i + 1].start, list[i + 1].end)]);
       i++;
     }
   }
