@@ -1,6 +1,7 @@
 // Clean reading view of a saved article, with "Save as PDF" (print dialog) and "Save as image".
 /* global DOMPurify */
 import { buildFileName } from './lib/names.js';
+import { A4, imagePdf, pageBreak } from './lib/pdf.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -26,7 +27,7 @@ $('theme').onclick = () => {
 
 if (!article) {
   status('This article is no longer available. Open the page and save it again.');
-  $('pdf').disabled = $('png').disabled = $('theme').disabled = true;
+  $('pdf').disabled = $('ipdf').disabled = $('png').disabled = $('theme').disabled = true;
   throw new Error('missing article');
 }
 chrome.storage.session.remove(key);
@@ -124,33 +125,121 @@ async function capturePart(y) {
   return { bitmap, y: window.scrollY };
 }
 
-async function savePng() {
-  $('pdf').disabled = $('png').disabled = true;
+/** Screenshots the whole reader view. Returns a function that draws any part of the article column. */
+async function captureArticle({ sharp = false } = {}) {
+  await imagesReady();
   document.body.classList.add('capturing');
+  // For the PDF, enlarge the article while capturing so text stays sharp when zoomed in.
+  if (sharp) {
+    const fit = Math.floor(((document.documentElement.clientWidth - 8) / $('doc').offsetWidth) * 10) / 10;
+    if (fit > 1) $('doc').style.zoom = String(Math.min(2, fit / (window.devicePixelRatio || 1)));
+  }
   try {
-    await imagesReady();
     const scale = window.devicePixelRatio || 1;
     const total = document.documentElement.scrollHeight;
     const view = window.innerHeight;
     const shots = [];
-    for (let y = 0; y < total; y += view) shots.push(await capturePart(y));
-    window.scrollTo(0, 0);
-    document.body.classList.remove('capturing');
-
+    for (let y = 0; y < total; y += view) {
+      status(`Capturing ${Math.min(100, Math.round(((y + view) / total) * 100))}%…`);
+      shots.push(await capturePart(y));
+    }
     // Keep only the article column, so wide windows don't add empty space at the sides.
     const box = $('doc').getBoundingClientRect();
     const left = Math.max(0, Math.floor(box.left * scale));
     const width = Math.min(shots[0].bitmap.width - left, Math.ceil(box.width * scale));
-    const fullHeight = Math.round(total * scale);
+    const height = Math.round(total * scale);
+    const background = getComputedStyle(document.documentElement).backgroundColor;
+    /** Draws article rows [top, top + rows) into ctx at offset y. */
+    const draw = (ctx, top, rows, y = 0) => {
+      ctx.save();
+      ctx.beginPath();
+      ctx.rect(0, y, width, rows);
+      ctx.clip();
+      for (const s of shots) ctx.drawImage(s.bitmap, -left, y + Math.round(s.y * scale) - top);
+      ctx.restore();
+    };
+    return { width, height, background, draw };
+  } finally {
+    window.scrollTo(0, 0);
+    $('doc').style.zoom = '';
+    document.body.classList.remove('capturing');
+  }
+}
+
+function busy(on) {
+  $('pdf').disabled = $('ipdf').disabled = $('png').disabled = $('theme').disabled = on;
+}
+
+function canvasOf(width, height, background) {
+  const canvas = new OffscreenCanvas(width, height);
+  const ctx = canvas.getContext('2d', { willReadFrequently: true });
+  ctx.fillStyle = background;
+  ctx.fillRect(0, 0, width, height);
+  return { canvas, ctx };
+}
+
+async function saveImagePdf() {
+  busy(true);
+  try {
+    const shot = await captureArticle({ sharp: true });
+    const { width, height, background } = shot;
+    const pageHeight = Math.round((width * A4.height) / A4.width);
+    const margin = Math.round(width * 0.05);
+
+    // A row is blank when it matches the background, so page breaks fall between lines and pictures.
+    const probe = canvasOf(width, 1, background);
+    const bg = probe.ctx.getImageData(0, 0, 1, 1).data;
+    const rowIsBlank = (y) => {
+      probe.ctx.fillRect(0, 0, width, 1);
+      shot.draw(probe.ctx, y, 1);
+      const px = probe.ctx.getImageData(0, 0, width, 1).data;
+      for (let i = 0; i < px.length; i += 4) {
+        if (Math.abs(px[i] - bg[0]) + Math.abs(px[i + 1] - bg[1]) + Math.abs(px[i + 2] - bg[2]) > 24) return false;
+      }
+      return true;
+    };
+
+    const pages = [];
+    for (let top = 0; top < height; ) {
+      const topMargin = pages.length ? margin : 0; // the article already has room at the very top
+      const room = pageHeight - topMargin - margin;
+      const end = pageBreak(top, top + room, height, rowIsBlank);
+      status(`Making page ${pages.length + 1}…`);
+      const { canvas, ctx } = canvasOf(width, pageHeight, background);
+      shot.draw(ctx, top, end - top, topMargin);
+      const jpeg = new Uint8Array(await (await canvas.convertToBlob({ type: 'image/jpeg', quality: 0.9 })).arrayBuffer());
+      pages.push({ jpeg, width, height: pageHeight });
+      top = end;
+      while (top < height && rowIsBlank(top)) top++; // no empty rows at a page start, and no empty last page
+    }
+
+    status('Saving PDF…');
+    const blob = new Blob([imagePdf(pages, { title: article.title })], { type: 'application/pdf' });
+    const url = URL.createObjectURL(blob);
+    await chrome.downloads
+      .download({ url, filename: buildFileName(article.title, article.url, 'pdf'), saveAs: true })
+      .catch(() => {}); // the user closed the dialog
+    setTimeout(() => URL.revokeObjectURL(url), 60000);
+    status(`Done. ${pages.length} ${pages.length === 1 ? 'page' : 'pages'}.`);
+  } catch (err) {
+    status(`Could not save the PDF: ${err.message || err}`);
+  } finally {
+    busy(false);
+  }
+}
+
+async function savePng() {
+  busy(true);
+  try {
+    const shot = await captureArticle();
+    const { width, background } = shot;
+    const fullHeight = shot.height;
     const pages = Math.ceil(fullHeight / MAX_IMAGE_HEIGHT);
     for (let p = 0; p < pages; p++) {
       const top = p * MAX_IMAGE_HEIGHT;
       const height = Math.min(MAX_IMAGE_HEIGHT, fullHeight - top);
-      const canvas = new OffscreenCanvas(width, height);
-      const ctx = canvas.getContext('2d');
-      ctx.fillStyle = getComputedStyle(document.documentElement).backgroundColor;
-      ctx.fillRect(0, 0, width, height);
-      for (const s of shots) ctx.drawImage(s.bitmap, -left, Math.round(s.y * scale) - top);
+      const { canvas, ctx } = canvasOf(width, height, background);
+      shot.draw(ctx, top, height);
       const blob = await canvas.convertToBlob({ type: 'image/png' });
       const url = URL.createObjectURL(blob);
       status(pages > 1 ? `Saving image ${p + 1} of ${pages}…` : 'Saving image…');
@@ -163,12 +252,12 @@ async function savePng() {
   } catch (err) {
     status(`Could not save the image: ${err.message || err}`);
   } finally {
-    document.body.classList.remove('capturing');
-    $('pdf').disabled = $('png').disabled = false;
+    busy(false);
   }
 }
 
 $('pdf').onclick = savePdf;
+$('ipdf').onclick = saveImagePdf;
 $('png').onclick = savePng;
 
 status('Loading images…');
@@ -176,3 +265,4 @@ await imagesReady();
 status('Ready.');
 if (params.get('action') === 'pdf') savePdf();
 if (params.get('action') === 'png') savePng();
+if (params.get('action') === 'ipdf') saveImagePdf();
