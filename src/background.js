@@ -297,6 +297,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 async function saveArticle(tabId, mode) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ['src/vendor/Readability.js'] });
   const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: extractArticle });
+  if (result?.paywalled) throw new Error('This article is for subscribers. Log in on the page to save it.');
   if (!result?.content) throw new Error('Could not find an article on this page.');
   const id = crypto.randomUUID();
   await clearOldArticles();
@@ -381,14 +382,14 @@ function extractArticle() {
     .forEach((n) => {
       if (!clone.contains(n) || n.matches('html, body, main, article') || n.querySelector('h1')) return;
       if (n.textContent.trim().length > 1500) return;
-      preview ||= /tilaa|subscribe|tilaajille|subscribers|kirjaudu|log in/i.test(n.textContent);
+      preview ||= /paywall/i.test(n.className) && /tilaa|tilaajille|subscribe|subscribers/i.test(n.textContent);
       n.remove();
     });
   // Video players, ads, comments and "read next" boxes are not part of the article.
   clone
     .querySelectorAll('video, audio, [aria-label*="player" i], [class*="player" i], [class*="comment" i], [id*="comment" i], [class*="related" i], [class*="advert" i], [class*="ad-slot" i], ' +
         '[class*="teaser" i], [data-testid*="teaser" i], [class*="recommend" i], [class*="newsletter" i], [class*="share" i], ' +
-        '[class*="article-tail" i], [data-testid="tags"], aside, nav, form')
+        '[class*="article-tail" i], [data-testid="tags"], aside, nav, form, body > footer, [class*="site-footer" i], [class*="footer__main" i]')
     .forEach((n) => {
       // A broad class match must never take the headline and article text with it.
       if (!n.matches('html, body, main') && !n.querySelector('h1')) n.remove();
@@ -411,6 +412,7 @@ function extractArticle() {
   });
   const article = new Readability(clone, { keepClasses: false }).parse();
   if (!article) return null;
+  if (preview && (article.textContent || '').trim().length < 300) return { paywalled: true };
   return {
     title: article.title || document.title,
     byline: article.byline || meta('meta[name="author"]') || meta('meta[property="article:author"]'),

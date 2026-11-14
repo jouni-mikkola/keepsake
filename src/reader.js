@@ -73,6 +73,9 @@ for (const node of [...clean.querySelectorAll('h1, h2, p, span, a, time, div')])
   const text = node.textContent.trim();
   if (text.length > 80 && node.matches('p')) intro = false;
   if (text.length > 60 || node.querySelector('img') || !clean.contains(node)) continue; // skip text, pictures and removed parts
+  // A word inside a sentence ("HS tarjoaa…") is part of the text, not a label.
+  const block = node.parentElement?.closest('p, li, h2, h3, blockquote, figcaption');
+  if (block && block.textContent.trim() !== text) continue;
   const lower = text.toLowerCase();
   const shortLabel = intro && text.length < 25 && !/[.!?:]$/.test(text) && !text.includes(' ', text.indexOf(' ') + 1) && !node.querySelector('*');
   const bylineLine = intro && article.byline && lower.startsWith(article.byline.trim().toLowerCase());
@@ -137,7 +140,7 @@ async function imagesReady() {
 function dropBrokenImages() {
   for (const img of [...$('content').querySelectorAll('img')]) {
     if (!img.complete) continue;
-    if (img.naturalWidth >= 50 && img.naturalHeight >= 30) continue;
+    if (img.naturalWidth >= 100 && img.naturalHeight >= 40) continue;
     const figure = img.closest('figure');
     img.remove();
     if (figure && !figure.querySelector('img, blockquote, table, pre, ul, ol')) figure.remove();
