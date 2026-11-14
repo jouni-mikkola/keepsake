@@ -317,19 +317,23 @@ function extractArticle() {
   /* global Readability */
   const meta = (sel) => document.querySelector(sel)?.getAttribute('content') || '';
   // Largest image in a srcset, so the saved copy doesn't get the small preview size.
+  // URLs may hold commas ("w_720,h_404") and some sites leave out the space after the comma between
+  // candidates, so read "url descriptor" pairs instead of splitting on commas.
   const largest = (srcset) => {
+    const text = (srcset || '').trim();
     let best = '';
     let bestW = 0;
-    for (const part of (srcset || '').split(/,\s+/)) {
-      const [url, size = '1x'] = part.trim().split(/\s+/);
+    for (const [, url, size] of text.matchAll(/,?\s*([^\s,][^\s]*)\s+(\d+(?:\.\d+)?[wx])/g)) {
       const w = parseFloat(size) * (size.endsWith('x') ? 1000 : 1);
-      if (url && w > bestW) [best, bestW] = [url, w];
+      if (w > bestW) [best, bestW] = [url, w];
     }
-    return best;
+    return best || (/^\S+$/.test(text) ? text : '');
   };
   const live = [...document.images];
   const clone = document.cloneNode(true);
+  const liveOf = new Map();
   clone.querySelectorAll('img').forEach((img, i) => {
+    liveOf.set(img, live[i]);
     const sources = [img.getAttribute('srcset'), ...[...(img.closest('picture')?.querySelectorAll('source') || [])]
       .filter((s) => !/avif/.test(s.type || ''))
       .map((s) => s.getAttribute('srcset'))];
@@ -340,6 +344,46 @@ function extractArticle() {
     img.removeAttribute('srcset');
     img.removeAttribute('loading');
   });
+  // Blurry low resolution stand-ins that sit next to the real picture.
+  clone.querySelectorAll('img').forEach((img) => {
+    const l = liveOf.get(img);
+    const small = l && l.complete && l.naturalWidth > 0 && l.naturalWidth < 50;
+    if (small || /(^|[-_\s])(preview|placeholder|lqip|blur(red)?)([-_\s]|$)/i.test(img.className)) img.remove();
+  });
+  // Readability drops buttons, and some sites wrap pictures in a zoom button.
+  clone.querySelectorAll('button').forEach((b) => b.querySelector('img') && b.replaceWith(...b.childNodes));
+  // Sites build captioned pictures from plain divs. Rebuild them as <figure><img><figcaption>
+  // so the caption stays with its picture.
+  const isCaption = (el) => el.matches('figcaption') || [...el.classList].some((c) => /(^|[-_])caption$|^caption/i.test(c));
+  const captionIn = (box) => [...box.querySelectorAll('*')].find(isCaption);
+  for (const img of [...clone.querySelectorAll('img')]) {
+    if (!clone.contains(img)) continue;
+    let box = img.closest('figure');
+    for (let n = img.parentElement, i = 0; !box && n && i < 4 && !n.matches('body, main, article'); n = n.parentElement, i++) {
+      if (captionIn(n)) box = n;
+    }
+    if (!box || box.matches('body, main, article') || box.querySelector('h1, h2') || box.querySelectorAll('img').length > 1) continue;
+    const caption = box.querySelector('figcaption') || captionIn(box);
+    const text = caption?.textContent.replace(/\s+/g, ' ').trim() || '';
+    if (box.textContent.replace(/\s+/g, ' ').trim().length - text.length > 300) continue; // holds article text too
+    const figure = clone.createElement('figure');
+    const pic = clone.createElement('img');
+    pic.setAttribute('src', img.getAttribute('src') || '');
+    pic.setAttribute('alt', img.getAttribute('alt') || '');
+    figure.append(pic);
+    if (text) figure.append(Object.assign(clone.createElement('figcaption'), { textContent: text }));
+    box.replaceWith(figure);
+  }
+  // Subscription offers are not the article. The reader says when only a preview was saved.
+  let preview = false;
+  clone
+    .querySelectorAll('[class*="paywall" i], [class*="subscribe" i], [class*="subscription" i], [class*="tilaa" i], [class*="tilaus" i]')
+    .forEach((n) => {
+      if (!clone.contains(n) || n.matches('html, body, main, article') || n.querySelector('h1')) return;
+      if (n.textContent.trim().length > 1500) return;
+      preview ||= /tilaa|subscribe|tilaajille|subscribers|kirjaudu|log in/i.test(n.textContent);
+      n.remove();
+    });
   // Video players, ads, comments and "read next" boxes are not part of the article.
   clone
     .querySelectorAll('video, audio, [aria-label*="player" i], [class*="player" i], [class*="comment" i], [id*="comment" i], [class*="related" i], [class*="advert" i], [class*="ad-slot" i], ' +
@@ -349,15 +393,29 @@ function extractArticle() {
       // A broad class match must never take the headline and article text with it.
       if (!n.matches('html, body, main') && !n.querySelector('h1')) n.remove();
     });
-  clone.querySelectorAll('div, span, p').forEach((n) => {
-    if (/^(mainos|advertisement|annons|ad|anzeige)$/i.test(n.textContent.trim())) n.remove();
+  clone.querySelectorAll('div, span, p, li, time').forEach((n) => {
+    if (!clone.contains(n)) return;
+    const text = n.textContent.replace(/\s+/g, ' ').trim();
+    // Ad labels, and times like "47m ago" that are wrong as soon as the copy is saved.
+    if (/^(mainos|advertisement|advertising|adchoices|adchoices ?advertising|annons|ad|anzeige|sponsored)$/i.test(text) ||
+        /^\d+\s*(s|m|h|d|min|mins|minutes?|hours?|hrs?|days?)\s+ago$/i.test(text)) {
+      n.remove();
+      return;
+    }
+    // Embeds blocked by cookie choices leave a notice and a logo behind.
+    if (text.length < 300 && /unavailable due to your cookie|cookie settings|evästeasetu|evästevalin/i.test(text) && !n.querySelector('p p')) {
+      let box = n;
+      while (box.parentElement && box.parentElement !== clone.body && box.parentElement.textContent.trim().length < 300) box = box.parentElement;
+      box.remove();
+    }
   });
   const article = new Readability(clone, { keepClasses: false }).parse();
   if (!article) return null;
   return {
     title: article.title || document.title,
     byline: article.byline || meta('meta[name="author"]') || meta('meta[property="article:author"]'),
-    siteName: article.siteName || meta('meta[property="og:site_name"]') || location.hostname,
+    siteName: (article.siteName || meta('meta[property="og:site_name"]') || location.hostname).replace(/^www\./, ''),
+    preview,
     published: article.publishedTime || meta('meta[property="article:published_time"]'),
     excerpt: article.excerpt || '',
     lang: document.documentElement.lang || article.lang || '',

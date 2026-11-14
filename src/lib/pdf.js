@@ -2,6 +2,7 @@
 // the exact colours and theme of the reader view whatever the print dialog settings are.
 
 export const A4 = { width: 595.28, height: 841.89 }; // points
+export const PHONE = { width: 360, height: 640 }; // a 9:16 page that fills a phone screen
 
 const encoder = new TextEncoder();
 
@@ -18,11 +19,12 @@ function pdfText(text) {
 
 /**
  * @param {{jpeg: Uint8Array, width: number, height: number}[]} pages pixel size of each JPEG
- * @param {{title?: string}} info
+ * @param {{title?: string, size?: {width: number, height: number}}} info page size in points, A4 by default
  * @returns {Uint8Array}
  */
 export function imagePdf(pages, info = {}) {
   if (!pages.length) throw new Error('No pages');
+  const size = info.size || A4;
   const parts = [];
   const offsets = [];
   let length = 0;
@@ -50,12 +52,12 @@ export function imagePdf(pages, info = {}) {
   object(3, `<< /Title ${pdfText(info.title || '')} /Producer (Keepsake) >>`);
   pages.forEach((page, i) => {
     const [pageId, imageId, drawId] = [pageIds[i], pageIds[i] + 1, pageIds[i] + 2];
-    const w = A4.width;
-    const h = (A4.width * page.height) / page.width;
-    const draw = encoder.encode(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} 0 ${(A4.height - h).toFixed(2)} cm /P Do Q`);
+    const w = size.width;
+    const h = (size.width * page.height) / page.width;
+    const draw = encoder.encode(`q ${w.toFixed(2)} 0 0 ${h.toFixed(2)} 0 ${(size.height - h).toFixed(2)} cm /P Do Q`);
     object(
       pageId,
-      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${A4.width} ${A4.height}] ` +
+      `<< /Type /Page /Parent 2 0 R /MediaBox [0 0 ${size.width} ${size.height}] ` +
         `/Resources << /XObject << /P ${imageId} 0 R >> >> /Contents ${drawId} 0 R >>`,
     );
     object(
