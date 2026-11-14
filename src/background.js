@@ -1,6 +1,7 @@
 // Keepsake service worker: notices media requests, keeps a per-tab list, and starts saves.
 import { parsePlaylist } from './lib/hls.js';
 import { buildFileName } from './lib/names.js';
+import { visibleItems } from './lib/items.js';
 
 const MAX_ITEMS_PER_TAB = 40;
 const MIN_FILE_BYTES = 300 * 1024; // smaller files are placeholders and tracking pixels, not videos
@@ -161,20 +162,6 @@ async function probe(tabId, itemId, url) {
  * Items the user cares about: hide variant playlists that belong to a master playlist. Tokens in the
  * query or in a path part ("hdntl=...") can differ between the two, so compare the plain path.
  */
-function playlistKey(url) {
-  try {
-    const parts = new URL(url).pathname.split('/').filter((p) => p && !p.includes('=') && !p.includes('~'));
-    return parts.slice(-3).join('/');
-  } catch {
-    return url;
-  }
-}
-
-function visibleItems(items) {
-  const children = new Set(items.filter((i) => i.master).flatMap((i) => i.children.map(playlistKey)));
-  return items.filter((i) => i.kind !== 'hls' || i.master || !children.has(playlistKey(i.url)));
-}
-
 const isMain = (i) => i.kind !== 'dash' && !i.other;
 
 async function updateBadge(tabId) {
