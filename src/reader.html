@@ -1,0 +1,25 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="no-referrer" />
+    <title>Keepsake</title>
+    <link rel="stylesheet" href="reader.css" />
+  </head>
+  <body>
+    <div id="toolbar">
+      <span id="status">Preparing…</span>
+      <button id="pdf" class="primary">Save as PDF</button>
+      <button id="png">Save as image</button>
+    </div>
+    <article>
+      <p id="site" class="kicker"></p>
+      <h1 id="title"></h1>
+      <p id="byline" class="byline"></p>
+      <div id="content"></div>
+      <footer id="source"></footer>
+    </article>
+    <script src="vendor/purify.min.js"></script>
+    <script type="module" src="reader.js"></script>
+  </body>
+</html>

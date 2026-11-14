@@ -1,0 +1,31 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="referrer" content="no-referrer" />
+    <link rel="stylesheet" href="popup.css" />
+  </head>
+  <body>
+    <header>
+      <img src="../icons/32.png" alt="" width="20" height="20" />
+      <h1>Keepsake</h1>
+    </header>
+
+    <section>
+      <h2>Article</h2>
+      <div class="row">
+        <button id="pdf" class="primary">Save as PDF</button>
+        <button id="png">Save as image</button>
+      </div>
+    </section>
+
+    <section>
+      <h2>Videos on this page</h2>
+      <ul id="videos"></ul>
+      <p id="empty" class="hint" hidden>No videos yet. Press play on the video, then open Keepsake again.</p>
+    </section>
+
+    <p id="error" class="error" role="alert" hidden></p>
+    <script type="module" src="popup.js"></script>
+  </body>
+</html>
