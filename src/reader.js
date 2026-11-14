@@ -126,9 +126,14 @@ async function capturePart(y) {
 }
 
 /** Screenshots the whole reader view. Returns a function that draws any part of the article column. */
-async function captureArticle() {
+async function captureArticle({ sharp = false } = {}) {
   await imagesReady();
   document.body.classList.add('capturing');
+  // For the PDF, enlarge the article while capturing so text stays sharp when zoomed in.
+  if (sharp) {
+    const fit = Math.floor(((document.documentElement.clientWidth - 8) / $('doc').offsetWidth) * 10) / 10;
+    if (fit > 1) $('doc').style.zoom = String(Math.min(2, fit / (window.devicePixelRatio || 1)));
+  }
   try {
     const scale = window.devicePixelRatio || 1;
     const total = document.documentElement.scrollHeight;
@@ -156,6 +161,7 @@ async function captureArticle() {
     return { width, height, background, draw };
   } finally {
     window.scrollTo(0, 0);
+    $('doc').style.zoom = '';
     document.body.classList.remove('capturing');
   }
 }
@@ -175,7 +181,7 @@ function canvasOf(width, height, background) {
 async function saveImagePdf() {
   busy(true);
   try {
-    const shot = await captureArticle();
+    const shot = await captureArticle({ sharp: true });
     const { width, height, background } = shot;
     const pageHeight = Math.round((width * A4.height) / A4.width);
     const margin = Math.round(width * 0.05);
