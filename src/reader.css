@@ -1,29 +1,65 @@
-:root { color-scheme: light; color: #1b1b1b; background: #fff; }
+:root {
+  color-scheme: light;
+  --bg: #ffffff; --text: #1b1b1b; --muted: #666a70; --line: #dddfe3; --accent: #2f62e6;
+  --bar: #f4f5f7; --button: #ffffff; --quote: #c9ccd2;
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #16181d; --text: #e4e6ea; --muted: #a0a5ad; --line: #2f333b; --accent: #7ea3ff;
+  --bar: #1f2228; --button: #2a2e36; --quote: #454b55;
+}
+html { background: var(--bg); color: var(--text); -webkit-print-color-adjust: exact; print-color-adjust: exact; }
 /* Chrome gives extension pages a smaller body font, so set it on body itself. */
 body { margin: 0; font: 18px/1.6 Georgia, "Times New Roman", serif; }
-body > article { max-width: 680px; margin: 0 auto; padding: 32px 20px 48px; }
+
+/* On screen the sheet table is just a block. In print its empty head and foot repeat on every page,
+   which gives each page a top and bottom margin while the background still fills the whole page. */
+table.sheet, table.sheet > tbody, table.sheet > tbody > tr, table.sheet > tbody > tr > td { display: block; }
+table.sheet > thead, table.sheet > tfoot { display: none; }
+
+#doc { max-width: 680px; margin: 0 auto; padding: 32px 24px 40px; }
 h1 { font: 700 34px/1.2 system-ui, sans-serif; margin: 0 0 12px; }
-.kicker { font: 600 13px system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; color: #2f62e6; margin: 0 0 8px; }
-figure.lead { margin: 0 0 24px; }
-figure.lead img { width: 100%; border-radius: 4px; }
-.byline { font: 14px system-ui, sans-serif; color: #666; margin: 0 0 24px; }
-img, video, figure { max-width: 100%; height: auto; }
+h2, h3 { font-family: system-ui, sans-serif; line-height: 1.3; }
+.kicker { font: 600 13px system-ui, sans-serif; text-transform: uppercase; letter-spacing: .05em; color: var(--accent); margin: 0 0 8px; }
+.byline { font: 14px system-ui, sans-serif; color: var(--muted); margin: 0 0 24px; }
+.byline:empty { display: none; }
+img { max-width: 100%; height: auto; display: block; margin: 0 auto; border-radius: 4px; }
 figure { margin: 24px 0; }
-figcaption { font: 14px/1.4 system-ui, sans-serif; color: #555; margin-top: 6px; }
-a { color: inherit; }
-blockquote { border-left: 3px solid #ccc; margin: 16px 0; padding-left: 16px; color: #444; }
-footer { margin-top: 40px; padding-top: 12px; border-top: 1px solid #ddd; font: 12px/1.5 system-ui, sans-serif; color: #666; word-break: break-all; }
+figure.lead { margin: 0 0 24px; }
+figure.lead img { width: 100%; }
+figcaption { font: 14px/1.4 system-ui, sans-serif; color: var(--muted); margin-top: 6px; }
+a { color: inherit; text-decoration-color: var(--quote); }
+blockquote { border-left: 3px solid var(--quote); margin: 16px 0; padding-left: 16px; color: var(--muted); }
+#content > :last-child, #content :is(div, section, article):last-child > :last-child { margin-bottom: 0; }
+footer { margin-top: 32px; padding-top: 10px; border-top: 1px solid var(--line); font: 12px/1.5 system-ui, sans-serif; color: var(--muted); word-break: break-all; }
+
 #toolbar {
   position: sticky; top: 0; z-index: 1; display: flex; gap: 8px; align-items: center; justify-content: flex-end;
-  padding: 8px 16px; background: #f4f4f2; border-bottom: 1px solid #ddd; font: 14px system-ui, sans-serif;
+  padding: 8px 16px; background: var(--bar); border-bottom: 1px solid var(--line); font: 14px system-ui, sans-serif;
 }
-#status { margin-right: auto; color: #555; }
-button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid #bbb; background: #fff; cursor: pointer; }
-button.primary { background: #2f62e6; border-color: #2f62e6; color: #fff; }
+#status { margin-right: auto; color: var(--muted); }
+button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid var(--line); background: var(--button); color: var(--text); cursor: pointer; }
+button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
+:root[data-theme="dark"] button.primary { color: #0e1420; }
 body.capturing #toolbar { display: none; }
+
 @media print {
+  @page { margin: 0; }
   #toolbar { display: none; }
-  body > article { max-width: none; padding: 0; }
-  @page { margin: 18mm 16mm; }
-  img, figure { break-inside: avoid; }
+  body { font-size: 11.5pt; }
+  table.sheet { display: table; width: 100%; border-collapse: collapse; }
+  table.sheet > thead { display: table-header-group; }
+  table.sheet > tfoot { display: table-footer-group; }
+  table.sheet > tbody { display: table-row-group; }
+  table.sheet > tbody > tr { display: table-row; }
+  table.sheet > tbody > tr > td { display: table-cell; padding: 0; }
+  td.gap { height: 14mm; padding: 0; }
+  #doc { max-width: none; padding: 0 18mm; }
+  h1 { font-size: 24pt; }
+  /* Keep pictures from pushing a whole page of empty space ahead of them. */
+  img { max-height: 110mm; width: auto; }
+  figure.lead img { width: auto; }
+  figure, img, blockquote { break-inside: avoid; }
+  h1, h2, h3 { break-after: avoid; }
+  footer { break-inside: avoid; }
 }

@@ -11,9 +11,22 @@ function status(text) {
   $('status').textContent = text;
 }
 
+// Light or dark follows the system until the user picks one. The PDF and image use the same look.
+const { readerTheme } = await chrome.storage.local.get('readerTheme');
+function applyTheme(theme) {
+  document.documentElement.dataset.theme = theme;
+  $('theme').textContent = theme === 'dark' ? 'Light' : 'Dark';
+}
+applyTheme(readerTheme || (matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'));
+$('theme').onclick = () => {
+  const next = document.documentElement.dataset.theme === 'dark' ? 'light' : 'dark';
+  applyTheme(next);
+  chrome.storage.local.set({ readerTheme: next });
+};
+
 if (!article) {
   status('This article is no longer available. Open the page and save it again.');
-  $('pdf').disabled = $('png').disabled = true;
+  $('pdf').disabled = $('png').disabled = $('theme').disabled = true;
   throw new Error('missing article');
 }
 chrome.storage.session.remove(key);
@@ -47,6 +60,8 @@ clean.querySelectorAll('img').forEach((img) => {
   img.referrerPolicy = 'no-referrer';
   img.loading = 'eager';
 });
+// A video's caption has nothing left to describe once the video is gone.
+clean.querySelectorAll('figure').forEach((f) => f.querySelector('img, blockquote, table, pre, ul, ol') || f.remove());
 clean.querySelectorAll('video, audio, source, picture > source').forEach((n) => n.remove());
 
 // The headline, author and time are shown above the text already, so drop their copies from the body.
@@ -57,8 +72,10 @@ for (const node of [...clean.querySelectorAll('h1, h2, p, span, a, time, div')])
   const text = node.textContent.trim();
   if (text.length > 80 && node.matches('p')) intro = false;
   if (text.length > 60 || node.querySelector('img') || !clean.contains(node)) continue; // skip text, pictures and removed parts
-  const shortLabel = intro && text.length < 25 && !/[.!?:]$/.test(text) && !text.includes(' ', text.indexOf(' ') + 1);
-  if (!text || repeats.has(text.toLowerCase()) || node.matches('time') || /^\d{1,2}\.\d{1,2}\.(\d{2,4})?\s+\d{1,2}[:.]\d{2}$/.test(text) || (shortLabel && node.matches('span') && node.parentElement?.textContent.trim() === text)) {
+  const lower = text.toLowerCase();
+  const shortLabel = intro && text.length < 25 && !/[.!?:]$/.test(text) && !text.includes(' ', text.indexOf(' ') + 1) && !node.querySelector('*');
+  const bylineLine = intro && article.byline && lower.startsWith(article.byline.trim().toLowerCase());
+  if (!text || repeats.has(lower) || bylineLine || node.matches('time') || /^\d{1,2}\.\d{1,2}\.(\d{2,4})?\s+\d{1,2}[:.]\d{2}$/.test(text) || shortLabel) {
     (node.parentElement?.textContent.trim() === text && node.parentElement !== clean ? node.parentElement : node).remove();
   }
 }
@@ -120,7 +137,10 @@ async function savePng() {
     window.scrollTo(0, 0);
     document.body.classList.remove('capturing');
 
-    const width = shots[0].bitmap.width;
+    // Keep only the article column, so wide windows don't add empty space at the sides.
+    const box = $('doc').getBoundingClientRect();
+    const left = Math.max(0, Math.floor(box.left * scale));
+    const width = Math.min(shots[0].bitmap.width - left, Math.ceil(box.width * scale));
     const fullHeight = Math.round(total * scale);
     const pages = Math.ceil(fullHeight / MAX_IMAGE_HEIGHT);
     for (let p = 0; p < pages; p++) {
@@ -128,9 +148,9 @@ async function savePng() {
       const height = Math.min(MAX_IMAGE_HEIGHT, fullHeight - top);
       const canvas = new OffscreenCanvas(width, height);
       const ctx = canvas.getContext('2d');
-      ctx.fillStyle = '#fff';
+      ctx.fillStyle = getComputedStyle(document.documentElement).backgroundColor;
       ctx.fillRect(0, 0, width, height);
-      for (const s of shots) ctx.drawImage(s.bitmap, 0, Math.round(s.y * scale) - top);
+      for (const s of shots) ctx.drawImage(s.bitmap, -left, Math.round(s.y * scale) - top);
       const blob = await canvas.convertToBlob({ type: 'image/png' });
       const url = URL.createObjectURL(blob);
       status(pages > 1 ? `Saving image ${p + 1} of ${pages}…` : 'Saving image…');

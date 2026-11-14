@@ -71,7 +71,8 @@ chrome.webRequest.onHeadersReceived.addListener(
     if (details.statusCode >= 400) return;
     const kind = classify(details);
     if (!kind) return;
-    const size = totalSize(details);
+    // For a playlist the response size is only the text, not the video.
+    const size = kind === 'file' ? totalSize(details) : 0;
     if (kind === 'file' && size && size < MIN_FILE_BYTES) return;
     const item = { url: details.url, kind, size, frameId: details.frameId, ad: AD_URL.test(details.url) };
     serial(() => addItem(details.tabId, item)).catch(console.warn);
@@ -430,8 +431,16 @@ function scanPage() {
   return {
     videos,
     title: (ld?.name || meta('meta[property="og:title"]') || '').slice(0, 200),
-    image: ld?.thumb || meta('meta[property="og:image"]'),
+    image: absolute(ld?.thumb || meta('meta[property="og:image"]')),
   };
+
+  function absolute(url) {
+    try {
+      return url ? new URL(url, location.href).href : '';
+    } catch {
+      return '';
+    }
+  }
 }
 
 function safeImage(url) {
@@ -474,6 +483,11 @@ async function scanTab(tabId) {
       if (v?.width && !item.width) [item.width, item.height] = [v.width, v.height];
       if (v?.duration && !item.duration) item.duration = v.duration;
       item.other = item.stale || item.ad || Boolean(v?.ad) || (item.kind === 'file' && !v && !item.size);
+    }
+    // A clip of a few seconds next to a real video is a player intro or an ad, not the story.
+    const main = visibleItems(fresh.items).filter((i) => !i.other);
+    if (main.some((i) => i.duration >= 15)) {
+      for (const i of main) if (i.duration && i.duration < 10) i.other = true;
     }
     await setTab(tabId, fresh);
   });

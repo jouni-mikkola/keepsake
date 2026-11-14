@@ -11,14 +11,21 @@
       <span id="status">Preparing…</span>
       <button id="pdf" class="primary">Save as PDF</button>
       <button id="png">Save as image</button>
+      <button id="theme" title="Switch between light and dark">Dark</button>
     </div>
-    <article>
-      <p id="site" class="kicker"></p>
-      <h1 id="title"></h1>
-      <p id="byline" class="byline"></p>
-      <div id="content"></div>
-      <footer id="source"></footer>
-    </article>
+    <table class="sheet">
+      <thead><tr><td class="gap"></td></tr></thead>
+      <tbody><tr><td>
+        <article id="doc">
+          <p id="site" class="kicker"></p>
+          <h1 id="title"></h1>
+          <p id="byline" class="byline"></p>
+          <div id="content"></div>
+          <footer id="source"></footer>
+        </article>
+      </td></tr></tbody>
+      <tfoot><tr><td class="gap"></td></tr></tfoot>
+    </table>
     <script src="vendor/purify.min.js"></script>
     <script type="module" src="reader.js"></script>
   </body>
