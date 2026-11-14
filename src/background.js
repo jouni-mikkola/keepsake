@@ -398,7 +398,7 @@ function extractArticle() {
     if (!clone.contains(n)) return;
     const text = n.textContent.replace(/\s+/g, ' ').trim();
     // Ad labels, and times like "47m ago" that are wrong as soon as the copy is saved.
-    if (/^(mainos|advertisement|advertising|adchoices|adchoices ?advertising|annons|ad|anzeige|sponsored)$/i.test(text) ||
+    if (/^(mainos|advertisement|advertising|adchoices|adchoices ?advertising|annons|ad|anzeige|sponsored|add as preferred on google)$/i.test(text) ||
         /^\d+\s*(s|m|h|d|min|mins|minutes?|hours?|hrs?|days?)\s+ago$/i.test(text)) {
       n.remove();
       return;
@@ -410,7 +410,23 @@ function extractArticle() {
       box.remove();
     }
   });
-  const article = new Readability(clone, { keepClasses: false }).parse();
+  // Readability sometimes keeps only one part of an article that is split into many blocks.
+  // When the page has one clear article element holding much more text, read only that element.
+  const textOf = (root) => [...root.querySelectorAll('p')].reduce((n, p) => n + p.textContent.trim().length, 0);
+  const box = [...clone.querySelectorAll('article, [itemprop="articleBody"], main')]
+    .map((n) => [n, textOf(n)])
+    .sort((a, b) => b[1] - a[1])[0];
+  const backup = box && clone.cloneNode(true);
+  let article = new Readability(clone, { keepClasses: false }).parse();
+  if (box && box[1] > 1000 && (article?.textContent || '').trim().length < box[1] * 0.6) {
+    const only = backup.querySelectorAll('article, [itemprop="articleBody"], main');
+    const element = [...only].sort((a, b) => textOf(b) - textOf(a))[0];
+    const html = element.innerHTML;
+    backup.body.replaceChildren(element);
+    const retry = new Readability(backup, { keepClasses: false }).parse();
+    if ((retry?.textContent || '').trim().length >= box[1] * 0.6) article = retry;
+    else if (article) article = { ...article, content: html, textContent: element.textContent };
+  }
   if (!article) return null;
   if (preview && (article.textContent || '').trim().length < 300) return { paywalled: true };
   return {
@@ -585,7 +601,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     },
     scan: () => scanTab(msg.tabId),
     download: () => startDownload(msg.tabId, msg.itemId),
-    article: () => saveArticle(msg.tabId, ['png', 'ipdf'].includes(msg.mode) ? msg.mode : 'pdf'),
+    article: () => saveArticle(msg.tabId, ['png', 'ipdf', 'phone'].includes(msg.mode) ? msg.mode : 'pdf'),
     async cancel() {
       chrome.runtime.sendMessage({ target: 'offscreen', type: 'cancel', jobId: msg.jobId }).catch(() => {});
       await setJob(msg.jobId, null);

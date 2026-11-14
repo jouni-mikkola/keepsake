@@ -72,7 +72,12 @@ const repeats = new Set([article.title, article.byline, article.siteName].filter
 for (const node of [...clean.querySelectorAll('h1, h2, p, span, a, time, div')]) {
   const text = node.textContent.trim();
   if (text.length > 80 && node.matches('p')) intro = false;
-  if (text.length > 60 || node.querySelector('img') || !clean.contains(node)) continue; // skip text, pictures and removed parts
+  if (!clean.contains(node) || node.querySelector('img')) continue; // removed parts and pictures
+  if (node.matches('h1, h2') && repeats.has(text.toLowerCase())) {
+    node.remove(); // the headline again, however long
+    continue;
+  }
+  if (text.length > 60) continue; // real text
   // A word inside a sentence ("HS tarjoaa…") is part of the text, not a label.
   const block = node.parentElement?.closest('p, li, h2, h3, blockquote, figcaption');
   if (block && block.textContent.trim() !== text) continue;
@@ -260,7 +265,7 @@ async function saveImagePdf({ phone = false } = {}) {
     status('Saving PDF…');
     const blob = new Blob([imagePdf(pages, { title: article.title, size })], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
-    const name = buildFileName(phone ? `${article.title} (phone)` : article.title, article.url, 'pdf');
+    const name = buildFileName(article.title, article.url, 'pdf').replace(/\.pdf$/, phone ? ' (phone).pdf' : '.pdf');
     await chrome.downloads
       .download({ url, filename: name, saveAs: true })
       .catch(() => {}); // the user closed the dialog
