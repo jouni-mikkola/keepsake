@@ -5,6 +5,9 @@ import { buildFileName } from './lib/names.js';
 const MAX_ITEMS_PER_TAB = 40;
 const MIN_FILE_BYTES = 300 * 1024; // smaller files are placeholders and tracking pixels, not videos
 const AD_URL = /(^|[/._-])(ads?|adserver|advert\w*|banners?|preroll|doubleclick|imasdk|vast)([/._-]|$)/i;
+// Video ad networks, matched on the file's host or on the frame that asked for it.
+const AD_HOST = /(^|[./])(teads\.tv|googlevideo\.com|gvt1\.com|2mdn\.net|imasdk\.googleapis\.com|doubleclick\.net|googlesyndication\.com|adnxs\.com|adform\.net|smartadserver\.com|spotxchange\.com|springserve\.com|innovid\.com|improvedigital\.com|richaudience\.com|seenthis\.\w+|outbrain\.com|taboola\.com)(:\d+)?$/i;
+const AD_TITLE = /^(advertisement|ad|mainos|annons|anzeige|publicité|sponsored|sponsoroitu)$/i;
 const tabKey = (tabId) => `tab:${tabId}`;
 
 // ---------- small helpers ----------
@@ -74,7 +77,8 @@ chrome.webRequest.onHeadersReceived.addListener(
     // For a playlist the response size is only the text, not the video.
     const size = kind === 'file' ? totalSize(details) : 0;
     if (kind === 'file' && size && size < MIN_FILE_BYTES) return;
-    const item = { url: details.url, kind, size, frameId: details.frameId, ad: AD_URL.test(details.url) };
+    const ad = AD_URL.test(details.url) || AD_HOST.test(new URL(details.url).hostname) || AD_HOST.test(details.initiator || '');
+    const item = { url: details.url, kind, size, frameId: details.frameId, ad };
     serial(() => addItem(details.tabId, item)).catch(console.warn);
   },
   { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'xmlhttprequest', 'media', 'other'] },
@@ -153,11 +157,22 @@ async function probe(tabId, itemId, url) {
   updateBadge(tabId);
 }
 
-/** Items the user cares about: hide variant playlists that belong to a master playlist. */
+/**
+ * Items the user cares about: hide variant playlists that belong to a master playlist. Tokens in the
+ * query or in a path part ("hdntl=...") can differ between the two, so compare the plain path.
+ */
+function playlistKey(url) {
+  try {
+    const parts = new URL(url).pathname.split('/').filter((p) => p && !p.includes('=') && !p.includes('~'));
+    return parts.slice(-3).join('/');
+  } catch {
+    return url;
+  }
+}
+
 function visibleItems(items) {
-  const strip = (u) => u.split('?')[0];
-  const children = new Set(items.filter((i) => i.master).flatMap((i) => i.children.flatMap((c) => [c, strip(c)])));
-  return items.filter((i) => i.kind !== 'hls' || i.master || !(children.has(i.url) || children.has(strip(i.url))));
+  const children = new Set(items.filter((i) => i.master).flatMap((i) => i.children.map(playlistKey)));
+  return items.filter((i) => i.kind !== 'hls' || i.master || !children.has(playlistKey(i.url)));
 }
 
 const isMain = (i) => i.kind !== 'dash' && !i.other;
@@ -282,6 +297,7 @@ chrome.downloads.onChanged.addListener(async (delta) => {
 async function saveArticle(tabId, mode) {
   await chrome.scripting.executeScript({ target: { tabId }, files: ['src/vendor/Readability.js'] });
   const [{ result }] = await chrome.scripting.executeScript({ target: { tabId }, func: extractArticle });
+  if (result?.paywalled) throw new Error('This article is for subscribers. Log in on the page to save it.');
   if (!result?.content) throw new Error('Could not find an article on this page.');
   const id = crypto.randomUUID();
   await clearOldArticles();
@@ -302,19 +318,23 @@ function extractArticle() {
   /* global Readability */
   const meta = (sel) => document.querySelector(sel)?.getAttribute('content') || '';
   // Largest image in a srcset, so the saved copy doesn't get the small preview size.
+  // URLs may hold commas ("w_720,h_404") and some sites leave out the space after the comma between
+  // candidates, so read "url descriptor" pairs instead of splitting on commas.
   const largest = (srcset) => {
+    const text = (srcset || '').trim();
     let best = '';
     let bestW = 0;
-    for (const part of (srcset || '').split(/,\s+/)) {
-      const [url, size = '1x'] = part.trim().split(/\s+/);
+    for (const [, url, size] of text.matchAll(/,?\s*([^\s,][^\s]*)\s+(\d+(?:\.\d+)?[wx])/g)) {
       const w = parseFloat(size) * (size.endsWith('x') ? 1000 : 1);
-      if (url && w > bestW) [best, bestW] = [url, w];
+      if (w > bestW) [best, bestW] = [url, w];
     }
-    return best;
+    return best || (/^\S+$/.test(text) ? text : '');
   };
   const live = [...document.images];
   const clone = document.cloneNode(true);
+  const liveOf = new Map();
   clone.querySelectorAll('img').forEach((img, i) => {
+    liveOf.set(img, live[i]);
     const sources = [img.getAttribute('srcset'), ...[...(img.closest('picture')?.querySelectorAll('source') || [])]
       .filter((s) => !/avif/.test(s.type || ''))
       .map((s) => s.getAttribute('srcset'))];
@@ -325,24 +345,95 @@ function extractArticle() {
     img.removeAttribute('srcset');
     img.removeAttribute('loading');
   });
+  // Blurry low resolution stand-ins that sit next to the real picture.
+  clone.querySelectorAll('img').forEach((img) => {
+    const l = liveOf.get(img);
+    const small = l && l.complete && l.naturalWidth > 0 && l.naturalWidth < 50;
+    if (small || /(^|[-_\s])(preview|placeholder|lqip|blur(red)?)([-_\s]|$)/i.test(img.className)) img.remove();
+  });
+  // Readability drops buttons, and some sites wrap pictures in a zoom button.
+  clone.querySelectorAll('button').forEach((b) => b.querySelector('img') && b.replaceWith(...b.childNodes));
+  // Sites build captioned pictures from plain divs. Rebuild them as <figure><img><figcaption>
+  // so the caption stays with its picture.
+  const isCaption = (el) => el.matches('figcaption') || [...el.classList].some((c) => /(^|[-_])caption$|^caption/i.test(c));
+  const captionIn = (box) => [...box.querySelectorAll('*')].find(isCaption);
+  for (const img of [...clone.querySelectorAll('img')]) {
+    if (!clone.contains(img)) continue;
+    let box = img.closest('figure');
+    for (let n = img.parentElement, i = 0; !box && n && i < 4 && !n.matches('body, main, article'); n = n.parentElement, i++) {
+      if (captionIn(n)) box = n;
+    }
+    if (!box || box.matches('body, main, article') || box.querySelector('h1, h2') || box.querySelectorAll('img').length > 1) continue;
+    const caption = box.querySelector('figcaption') || captionIn(box);
+    const text = caption?.textContent.replace(/\s+/g, ' ').trim() || '';
+    if (box.textContent.replace(/\s+/g, ' ').trim().length - text.length > 300) continue; // holds article text too
+    const figure = clone.createElement('figure');
+    const pic = clone.createElement('img');
+    pic.setAttribute('src', img.getAttribute('src') || '');
+    pic.setAttribute('alt', img.getAttribute('alt') || '');
+    figure.append(pic);
+    if (text) figure.append(Object.assign(clone.createElement('figcaption'), { textContent: text }));
+    box.replaceWith(figure);
+  }
+  // Subscription offers are not the article. The reader says when only a preview was saved.
+  let preview = false;
+  clone
+    .querySelectorAll('[class*="paywall" i], [class*="subscribe" i], [class*="subscription" i], [class*="tilaa" i], [class*="tilaus" i]')
+    .forEach((n) => {
+      if (!clone.contains(n) || n.matches('html, body, main, article') || n.querySelector('h1')) return;
+      if (n.textContent.trim().length > 1500) return;
+      preview ||= /paywall/i.test(n.className) && /tilaa|tilaajille|subscribe|subscribers/i.test(n.textContent);
+      n.remove();
+    });
   // Video players, ads, comments and "read next" boxes are not part of the article.
   clone
     .querySelectorAll('video, audio, [aria-label*="player" i], [class*="player" i], [class*="comment" i], [id*="comment" i], [class*="related" i], [class*="advert" i], [class*="ad-slot" i], ' +
         '[class*="teaser" i], [data-testid*="teaser" i], [class*="recommend" i], [class*="newsletter" i], [class*="share" i], ' +
-        '[class*="article-tail" i], [data-testid="tags"], aside, nav, form')
+        '[class*="article-tail" i], [data-testid="tags"], aside, nav, form, body > footer, [class*="site-footer" i], [class*="footer__main" i]')
     .forEach((n) => {
       // A broad class match must never take the headline and article text with it.
       if (!n.matches('html, body, main') && !n.querySelector('h1')) n.remove();
     });
-  clone.querySelectorAll('div, span, p').forEach((n) => {
-    if (/^(mainos|advertisement|annons|ad|anzeige)$/i.test(n.textContent.trim())) n.remove();
+  clone.querySelectorAll('div, span, p, li, time').forEach((n) => {
+    if (!clone.contains(n)) return;
+    const text = n.textContent.replace(/\s+/g, ' ').trim();
+    // Ad labels, and times like "47m ago" that are wrong as soon as the copy is saved.
+    if (/^(mainos|advertisement|advertising|adchoices|adchoices ?advertising|annons|ad|anzeige|sponsored|add as preferred on google)$/i.test(text) ||
+        /^\d+\s*(s|m|h|d|min|mins|minutes?|hours?|hrs?|days?)\s+ago$/i.test(text)) {
+      n.remove();
+      return;
+    }
+    // Embeds blocked by cookie choices leave a notice and a logo behind.
+    if (text.length < 300 && /unavailable due to your cookie|cookie settings|evästeasetu|evästevalin/i.test(text) && !n.querySelector('p p')) {
+      let box = n;
+      while (box.parentElement && box.parentElement !== clone.body && box.parentElement.textContent.trim().length < 300) box = box.parentElement;
+      box.remove();
+    }
   });
-  const article = new Readability(clone, { keepClasses: false }).parse();
+  // Readability sometimes keeps only one part of an article that is split into many blocks.
+  // When the page has one clear article element holding much more text, read only that element.
+  const textOf = (root) => [...root.querySelectorAll('p')].reduce((n, p) => n + p.textContent.trim().length, 0);
+  const box = [...clone.querySelectorAll('article, [itemprop="articleBody"], main')]
+    .map((n) => [n, textOf(n)])
+    .sort((a, b) => b[1] - a[1])[0];
+  const backup = box && clone.cloneNode(true);
+  let article = new Readability(clone, { keepClasses: false }).parse();
+  if (box && box[1] > 1000 && (article?.textContent || '').trim().length < box[1] * 0.6) {
+    const only = backup.querySelectorAll('article, [itemprop="articleBody"], main');
+    const element = [...only].sort((a, b) => textOf(b) - textOf(a))[0];
+    const html = element.innerHTML;
+    backup.body.replaceChildren(element);
+    const retry = new Readability(backup, { keepClasses: false }).parse();
+    if ((retry?.textContent || '').trim().length >= box[1] * 0.6) article = retry;
+    else if (article) article = { ...article, content: html, textContent: element.textContent };
+  }
   if (!article) return null;
+  if (preview && (article.textContent || '').trim().length < 300) return { paywalled: true };
   return {
     title: article.title || document.title,
     byline: article.byline || meta('meta[name="author"]') || meta('meta[property="article:author"]'),
-    siteName: article.siteName || meta('meta[property="og:site_name"]') || location.hostname,
+    siteName: (article.siteName || meta('meta[property="og:site_name"]') || location.hostname).replace(/^www\./, ''),
+    preview,
     published: article.publishedTime || meta('meta[property="article:published_time"]'),
     excerpt: article.excerpt || '',
     lang: document.documentElement.lang || article.lang || '',
@@ -394,7 +485,9 @@ function scanPage() {
   const label = (video) => {
     let node = video;
     for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
-      const own = (node.getAttribute('aria-label') || node.getAttribute('title') || '').trim();
+      const own = (node.getAttribute('aria-label') || node.getAttribute('title') || '')
+        .replace(/^\s*(video ?player|videosoitin|soitin|player)\s*[-–—:|]\s*/i, '')
+        .trim();
       if (own.length > 3 && !generic.test(own)) return own;
       const caption = node.querySelector('figcaption')?.textContent.trim();
       if (caption) return caption;
@@ -423,7 +516,6 @@ function scanPage() {
       height: v.videoHeight,
       area: Math.round(r.width * r.height),
       playing: !v.paused,
-      ad: v.muted && v.loop && !v.controls,
       title: label(v).slice(0, 200),
       thumb: v.poster || grab(v),
     };
@@ -477,12 +569,14 @@ async function scanTab(tabId) {
     const fresh = await getTab(tabId);
     for (const item of visibleItems(fresh.items)) {
       const v = match(item);
-      item.title = v?.title || top.title || '';
-      item.thumb = safeImage(v?.thumb || '') || safeImage(top.image || '');
+      if (AD_TITLE.test(v?.title || '')) item.ad = true;
+      // An ad must never borrow the story's headline or picture.
+      item.title = item.ad ? 'Advertisement' : v?.title || top.title || '';
+      item.thumb = safeImage(v?.thumb || '') || (item.ad ? '' : safeImage(top.image || ''));
       item.playing = Boolean(v?.playing);
       if (v?.width && !item.width) [item.width, item.height] = [v.width, v.height];
-      if (v?.duration && !item.duration) item.duration = v.duration;
-      item.other = item.stale || item.ad || Boolean(v?.ad) || (item.kind === 'file' && !v && !item.size);
+      if (v?.duration && !item.duration && !item.live) item.duration = v.duration;
+      item.other = item.stale || item.ad || (item.kind === 'file' && !v && !item.size);
     }
     // A clip of a few seconds next to a real video is a player intro or an ad, not the story.
     const main = visibleItems(fresh.items).filter((i) => !i.other);
@@ -507,7 +601,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     },
     scan: () => scanTab(msg.tabId),
     download: () => startDownload(msg.tabId, msg.itemId),
-    article: () => saveArticle(msg.tabId, ['png', 'ipdf'].includes(msg.mode) ? msg.mode : 'pdf'),
+    article: () => saveArticle(msg.tabId, ['png', 'ipdf', 'phone'].includes(msg.mode) ? msg.mode : 'pdf'),
     async cancel() {
       chrome.runtime.sendMessage({ target: 'offscreen', type: 'cancel', jobId: msg.jobId }).catch(() => {});
       await setJob(msg.jobId, null);

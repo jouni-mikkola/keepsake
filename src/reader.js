@@ -1,7 +1,7 @@
 // Clean reading view of a saved article, with "Save as PDF" (print dialog) and "Save as image".
 /* global DOMPurify */
 import { buildFileName } from './lib/names.js';
-import { A4, imagePdf, pageBreak } from './lib/pdf.js';
+import { A4, PHONE, imagePdf, pageBreak } from './lib/pdf.js';
 
 const $ = (id) => document.getElementById(id);
 const params = new URLSearchParams(location.search);
@@ -27,7 +27,7 @@ $('theme').onclick = () => {
 
 if (!article) {
   status('This article is no longer available. Open the page and save it again.');
-  $('pdf').disabled = $('ipdf').disabled = $('png').disabled = $('theme').disabled = true;
+  $('pdf').disabled = $('ipdf').disabled = $('phone').disabled = $('png').disabled = $('theme').disabled = true;
   throw new Error('missing article');
 }
 chrome.storage.session.remove(key);
@@ -72,7 +72,15 @@ const repeats = new Set([article.title, article.byline, article.siteName].filter
 for (const node of [...clean.querySelectorAll('h1, h2, p, span, a, time, div')]) {
   const text = node.textContent.trim();
   if (text.length > 80 && node.matches('p')) intro = false;
-  if (text.length > 60 || node.querySelector('img') || !clean.contains(node)) continue; // skip text, pictures and removed parts
+  if (!clean.contains(node) || node.querySelector('img')) continue; // removed parts and pictures
+  if (node.matches('h1, h2') && repeats.has(text.toLowerCase())) {
+    node.remove(); // the headline again, however long
+    continue;
+  }
+  if (text.length > 60) continue; // real text
+  // A word inside a sentence ("HS tarjoaa…") is part of the text, not a label.
+  const block = node.parentElement?.closest('p, li, h2, h3, blockquote, figcaption');
+  if (block && block.textContent.trim() !== text) continue;
   const lower = text.toLowerCase();
   const shortLabel = intro && text.length < 25 && !/[.!?:]$/.test(text) && !text.includes(' ', text.indexOf(' ') + 1) && !node.querySelector('*');
   const bylineLine = intro && article.byline && lower.startsWith(article.byline.trim().toLowerCase());
@@ -81,8 +89,24 @@ for (const node of [...clean.querySelectorAll('h1, h2, p, span, a, time, div')])
   }
 }
 
-// Articles whose main picture is a video player have no images left, so use the page's preview image.
-const lead = !clean.querySelector('img') && safeUrl(article.image || '');
+// Articles whose main picture is a video player, or whose top picture sits outside the article text,
+// get the page's preview image on top, unless the text already starts with that picture.
+const pictureKey = (u) => {
+  try {
+    const parts = new URL(u).pathname.split('/').filter((p) => p.length >= 12);
+    return parts.length ? parts : [new URL(u).pathname];
+  } catch {
+    return [];
+  }
+};
+const samePicture = (a, b) => pictureKey(a).some((p) => pictureKey(b).includes(p));
+const firstBlock = [...clean.querySelectorAll('p, h2, h3, figure, img, ul, ol, blockquote')][0];
+const startsWithPicture = firstBlock && (firstBlock.matches('img') || firstBlock.querySelector?.('img'));
+const lead =
+  article.image &&
+  !startsWithPicture &&
+  ![...clean.querySelectorAll('img')].some((i) => samePicture(i.src, article.image)) &&
+  safeUrl(article.image);
 if (lead) {
   const img = Object.assign(document.createElement('img'), { src: lead, alt: '', referrerPolicy: 'no-referrer', loading: 'eager' });
   img.onerror = () => img.parentElement?.remove();
@@ -97,6 +121,9 @@ $('site').textContent = article.siteName || '';
 $('title').textContent = article.title;
 const date = article.published ? new Date(article.published) : null;
 $('byline').textContent = [article.byline, date && !isNaN(date) ? date.toLocaleDateString() : ''].filter(Boolean).join(' · ');
+if (article.preview) {
+  $('content').append(Object.assign(document.createElement('p'), { className: 'notice', textContent: 'Preview only. The full article is for subscribers.' }));
+}
 $('content').append(clean);
 $('source').textContent = `Source: ${article.url} · Saved ${new Date(article.savedAt).toLocaleString()} · For personal use.`;
 
@@ -104,13 +131,29 @@ $('source').textContent = `Source: ${article.url} · Saved ${new Date(article.sa
 async function imagesReady() {
   const imgs = [...document.images].filter((i) => !i.complete);
   await Promise.race([
-    Promise.all(imgs.map((i) => new Promise((r) => { i.onload = i.onerror = r; }))),
+    Promise.all(
+      imgs.map((i) => new Promise((r) => {
+        i.addEventListener('load', r, { once: true });
+        i.addEventListener('error', r, { once: true });
+      })),
+    ),
     new Promise((r) => setTimeout(r, 10000)),
   ]);
 }
 
+/** Broken pictures, placeholders and tiny icons leave empty boxes, so take them out. */
+function dropBrokenImages() {
+  for (const img of [...$('content').querySelectorAll('img')]) {
+    if (!img.complete) continue;
+    if (img.naturalWidth >= 100 && img.naturalHeight >= 40) continue;
+    const figure = img.closest('figure');
+    img.remove();
+    if (figure && !figure.querySelector('img, blockquote, table, pre, ul, ol')) figure.remove();
+  }
+}
+
 function savePdf() {
-  status('Choose "Save as PDF" as the destination in the print dialog.');
+  status('In the print dialog choose "Save as PDF" and Colour. If photos come out grey, use Image PDF.');
   window.print();
 }
 
@@ -126,9 +169,10 @@ async function capturePart(y) {
 }
 
 /** Screenshots the whole reader view. Returns a function that draws any part of the article column. */
-async function captureArticle({ sharp = false } = {}) {
+async function captureArticle({ sharp = false, phone = false } = {}) {
   await imagesReady();
   document.body.classList.add('capturing');
+  document.body.classList.toggle('phone', phone);
   // For the PDF, enlarge the article while capturing so text stays sharp when zoomed in.
   if (sharp) {
     const fit = Math.floor(((document.documentElement.clientWidth - 8) / $('doc').offsetWidth) * 10) / 10;
@@ -162,12 +206,28 @@ async function captureArticle({ sharp = false } = {}) {
   } finally {
     window.scrollTo(0, 0);
     $('doc').style.zoom = '';
-    document.body.classList.remove('capturing');
+    document.body.classList.remove('capturing', 'phone');
   }
 }
 
+/** Tells whether a row of the capture is plain background, so breaks fall between lines and pictures. */
+function blankRows(shot) {
+  const { width, background } = shot;
+  const probe = canvasOf(width, 1, background);
+  const bg = probe.ctx.getImageData(0, 0, 1, 1).data;
+  return (y) => {
+    probe.ctx.fillRect(0, 0, width, 1);
+    shot.draw(probe.ctx, y, 1);
+    const px = probe.ctx.getImageData(0, 0, width, 1).data;
+    for (let i = 0; i < px.length; i += 4) {
+      if (Math.abs(px[i] - bg[0]) + Math.abs(px[i + 1] - bg[1]) + Math.abs(px[i + 2] - bg[2]) > 24) return false;
+    }
+    return true;
+  };
+}
+
 function busy(on) {
-  $('pdf').disabled = $('ipdf').disabled = $('png').disabled = $('theme').disabled = on;
+  $('pdf').disabled = $('ipdf').disabled = $('phone').disabled = $('png').disabled = $('theme').disabled = on;
 }
 
 function canvasOf(width, height, background) {
@@ -178,26 +238,15 @@ function canvasOf(width, height, background) {
   return { canvas, ctx };
 }
 
-async function saveImagePdf() {
+async function saveImagePdf({ phone = false } = {}) {
   busy(true);
   try {
-    const shot = await captureArticle({ sharp: true });
+    const size = phone ? PHONE : A4;
+    const shot = await captureArticle({ sharp: true, phone });
     const { width, height, background } = shot;
-    const pageHeight = Math.round((width * A4.height) / A4.width);
-    const margin = Math.round(width * 0.05);
-
-    // A row is blank when it matches the background, so page breaks fall between lines and pictures.
-    const probe = canvasOf(width, 1, background);
-    const bg = probe.ctx.getImageData(0, 0, 1, 1).data;
-    const rowIsBlank = (y) => {
-      probe.ctx.fillRect(0, 0, width, 1);
-      shot.draw(probe.ctx, y, 1);
-      const px = probe.ctx.getImageData(0, 0, width, 1).data;
-      for (let i = 0; i < px.length; i += 4) {
-        if (Math.abs(px[i] - bg[0]) + Math.abs(px[i + 1] - bg[1]) + Math.abs(px[i + 2] - bg[2]) > 24) return false;
-      }
-      return true;
-    };
+    const pageHeight = Math.round((width * size.height) / size.width);
+    const margin = Math.round(width * (phone ? 0.04 : 0.05));
+    const rowIsBlank = blankRows(shot);
 
     const pages = [];
     for (let top = 0; top < height; ) {
@@ -214,10 +263,11 @@ async function saveImagePdf() {
     }
 
     status('Saving PDF…');
-    const blob = new Blob([imagePdf(pages, { title: article.title })], { type: 'application/pdf' });
+    const blob = new Blob([imagePdf(pages, { title: article.title, size })], { type: 'application/pdf' });
     const url = URL.createObjectURL(blob);
+    const name = buildFileName(article.title, article.url, 'pdf').replace(/\.pdf$/, phone ? ' (phone).pdf' : '.pdf');
     await chrome.downloads
-      .download({ url, filename: buildFileName(article.title, article.url, 'pdf'), saveAs: true })
+      .download({ url, filename: name, saveAs: true })
       .catch(() => {}); // the user closed the dialog
     setTimeout(() => URL.revokeObjectURL(url), 60000);
     status(`Done. ${pages.length} ${pages.length === 1 ? 'page' : 'pages'}.`);
@@ -234,19 +284,25 @@ async function savePng() {
     const shot = await captureArticle();
     const { width, background } = shot;
     const fullHeight = shot.height;
-    const pages = Math.ceil(fullHeight / MAX_IMAGE_HEIGHT);
-    for (let p = 0; p < pages; p++) {
-      const top = p * MAX_IMAGE_HEIGHT;
-      const height = Math.min(MAX_IMAGE_HEIGHT, fullHeight - top);
-      const { canvas, ctx } = canvasOf(width, height, background);
-      shot.draw(ctx, top, height);
+    // Very long articles become several images, cut between lines rather than through them.
+    const rowIsBlank = blankRows(shot);
+    const cuts = [];
+    for (let top = 0; top < fullHeight; ) {
+      const end = fullHeight - top <= MAX_IMAGE_HEIGHT ? fullHeight : pageBreak(top, top + MAX_IMAGE_HEIGHT, fullHeight, rowIsBlank, 1500);
+      cuts.push([top, end]);
+      top = end;
+    }
+    for (const [p, [top, end]] of cuts.entries()) {
+      const { canvas, ctx } = canvasOf(width, end - top, background);
+      shot.draw(ctx, top, end - top);
       const blob = await canvas.convertToBlob({ type: 'image/png' });
       const url = URL.createObjectURL(blob);
-      status(pages > 1 ? `Saving image ${p + 1} of ${pages}…` : 'Saving image…');
-      await chrome.downloads
-        .download({ url, filename: buildFileName(article.title, article.url, 'png', pages > 1 ? p : 0), saveAs: true })
-        .catch(() => {}); // the user closed the dialog
+      status(cuts.length > 1 ? `Saving image ${p + 1} of ${cuts.length}…` : 'Saving image…');
+      const filename = buildFileName(article.title, article.url, 'png', cuts.length > 1 ? p : 0);
+      // Ask where to save only once; the other parts go to the downloads folder.
+      const ok = await chrome.downloads.download({ url, filename, saveAs: p === 0 }).catch(() => null);
       setTimeout(() => URL.revokeObjectURL(url), 60000);
+      if (!ok) break; // the user closed the dialog
     }
     status('Done.');
   } catch (err) {
@@ -257,12 +313,15 @@ async function savePng() {
 }
 
 $('pdf').onclick = savePdf;
-$('ipdf').onclick = saveImagePdf;
+$('ipdf').onclick = () => saveImagePdf();
+$('phone').onclick = () => saveImagePdf({ phone: true });
 $('png').onclick = savePng;
 
 status('Loading images…');
 await imagesReady();
+dropBrokenImages();
 status('Ready.');
 if (params.get('action') === 'pdf') savePdf();
 if (params.get('action') === 'png') savePng();
 if (params.get('action') === 'ipdf') saveImagePdf();
+if (params.get('action') === 'phone') saveImagePdf({ phone: true });

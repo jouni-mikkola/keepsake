@@ -18,12 +18,17 @@ test('strips path tricks and unsafe characters', () => {
   assert.equal(safeFileName('x'.repeat(500)).length, 120);
 });
 
-test('keeps colons readable', () => {
-  assert.equal(safeFileName('Jessica lähetti videon IS:lle: ”Se on hieno”'), 'Jessica lähetti videon IS\ua789lle - ”Se on hieno”');
+test('keeps colons and questions readable', () => {
+  assert.equal(safeFileName('Jessica lähetti videon IS:lle: ”Se on hieno”'), 'Jessica lähetti videon IS-lle - ”Se on hieno”');
+  assert.equal(safeFileName('Kokous kello 10:30'), 'Kokous kello 10.30');
   assert.equal(safeFileName('C:\\Windows'), 'C Windows');
+  assert.equal(safeFileName('Osallistuisitko itse? Lannanheittojuhla'), 'Osallistuisitko itse - Lannanheittojuhla');
+  assert.equal(safeFileName('Uskooko Putin todella näitä videoita?'), 'Uskooko Putin todella näitä videoita');
 });
 
 test('cleanTitle keeps the headline', () => {
-  assert.equal(cleanTitle('Headline · Site'), 'Headline');
+  assert.equal(cleanTitle('Headline here · Site'), 'Headline here');
+  assert.equal(cleanTitle('Mielenosoitukset | Tuhannet marssivat Helsingissä'), 'Tuhannet marssivat Helsingissä');
+  assert.equal(cleanTitle('Video Player - Yhdysvaltain presidentti'), 'Yhdysvaltain presidentti');
   assert.equal(cleanTitle('No separators here'), 'No separators here');
 });

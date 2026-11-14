@@ -27,6 +27,7 @@ img { max-width: 100%; height: auto; display: block; margin: 0 auto; border-radi
 figure { margin: 24px 0; }
 figure.lead { margin: 0 0 24px; }
 figure.lead img { width: 100%; }
+.notice { font: 14px/1.4 system-ui, sans-serif; color: var(--muted); border: 1px solid var(--line); border-radius: 6px; padding: 8px 12px; }
 figcaption { font: 14px/1.4 system-ui, sans-serif; color: var(--muted); margin-top: 6px; }
 a { color: inherit; text-decoration-color: var(--quote); }
 blockquote { border-left: 3px solid var(--quote); margin: 16px 0; padding-left: 16px; color: var(--muted); }
@@ -42,6 +43,12 @@ button { font: inherit; padding: 6px 12px; border-radius: 6px; border: 1px solid
 button.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
 :root[data-theme="dark"] button.primary { color: #0e1420; }
 body.capturing #toolbar { display: none; }
+/* Phone PDF: a narrow column, so text reads at full size on a phone without zooming. */
+body.phone #doc { max-width: 380px; padding: 20px 16px 28px; }
+body.phone { font-size: 17px; }
+body.phone h1 { font-size: 26px; }
+body.phone img { max-height: 520px; width: auto; }
+body.phone figure.lead img { width: auto; }
 
 @media print {
   @page { margin: 0; }

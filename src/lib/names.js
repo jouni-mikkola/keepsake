@@ -7,7 +7,10 @@ export function safeFileName(name, fallback = 'download') {
     .normalize('NFC')
     .replace(/[\u0000-\u001f\u007f\u00ad\u200b-\u200f\u202a-\u202e\u2066-\u2069]/g, '') // control, zero-width, bidi, soft hyphen
     .replace(/\s*:\s+/g, ' - ') // "Headline: quote" -> "Headline - quote"
-    .replace(/([\p{L}\p{N}]):([\p{L}\p{N}])/gu, '$1꞉$2') // "IS:lle" keeps a colon-like letter that file systems allow
+    .replace(/(\d):(\d)/g, '$1.$2') // "10:30" -> "10.30"
+    .replace(/(\p{L}):(\p{L})/gu, '$1-$2') // "IS:lle" -> "IS-lle"
+    .replace(/[?]+\s*$/, '') // a question at the end needs no mark
+    .replace(/\s*[?]+\s+/g, ' - ') // "Why? Because" -> "Why - Because"
     .replace(/[\\/:*?"<>|~]/g, ' ')
     .replace(/\s+/g, ' ')
     .trim()
@@ -18,10 +21,13 @@ export function safeFileName(name, fallback = 'download') {
   return out;
 }
 
-/** "Headline | Section | Site" -> "Headline". */
+/** "Headline | Section | Site" or "Section | Headline" -> "Headline", the longest part. */
 export function cleanTitle(title) {
-  const parts = String(title ?? '').split(/\s+[|·•]\s+/);
-  return parts[0].trim() || String(title ?? '').trim();
+  const whole = String(title ?? '')
+    .replace(/^\s*(video ?player|videosoitin|soitin|player)\s*[-–—:|]\s*/i, '')
+    .trim();
+  const parts = whole.split(/\s+[|·•]\s+/).map((p) => p.trim());
+  return parts.reduce((a, b) => (b.length > a.length ? b : a), '') || whole;
 }
 
 export function siteName(url) {

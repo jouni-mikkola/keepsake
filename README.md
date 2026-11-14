@@ -16,7 +16,7 @@ It doesn't get around paywalls, logins or DRM. It only saves what your browser a
 
 Play the video, click the Keepsake icon and press Download. The video is saved like any other download.
 
-For articles press Save as PDF or Save as image. A clean copy of the article opens in a new tab, in a light or dark look. Its Image PDF button saves the pages as pictures, so colours stay exact whatever the print settings are.
+For articles press Save as PDF or Save as image. A clean copy of the article opens in a new tab, in a light or dark look. Its Image PDF button saves the pages as pictures, so colours stay exact whatever the print settings are. Phone PDF does the same with pages shaped like a phone screen, which is handy for sharing in a chat app.
 
 <img src="docs/reader.png" alt="Clean copy of an article in the dark look" width="720">
 
