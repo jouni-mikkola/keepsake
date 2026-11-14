@@ -5,6 +5,9 @@ import { buildFileName } from './lib/names.js';
 const MAX_ITEMS_PER_TAB = 40;
 const MIN_FILE_BYTES = 300 * 1024; // smaller files are placeholders and tracking pixels, not videos
 const AD_URL = /(^|[/._-])(ads?|adserver|advert\w*|banners?|preroll|doubleclick|imasdk|vast)([/._-]|$)/i;
+// Video ad networks, matched on the file's host or on the frame that asked for it.
+const AD_HOST = /(^|[./])(teads\.tv|googlevideo\.com|gvt1\.com|2mdn\.net|imasdk\.googleapis\.com|doubleclick\.net|googlesyndication\.com|adnxs\.com|adform\.net|smartadserver\.com|spotxchange\.com|springserve\.com|innovid\.com|improvedigital\.com|richaudience\.com|seenthis\.\w+|outbrain\.com|taboola\.com)(:\d+)?$/i;
+const AD_TITLE = /^(advertisement|ad|mainos|annons|anzeige|publicité|sponsored|sponsoroitu)$/i;
 const tabKey = (tabId) => `tab:${tabId}`;
 
 // ---------- small helpers ----------
@@ -74,7 +77,8 @@ chrome.webRequest.onHeadersReceived.addListener(
     // For a playlist the response size is only the text, not the video.
     const size = kind === 'file' ? totalSize(details) : 0;
     if (kind === 'file' && size && size < MIN_FILE_BYTES) return;
-    const item = { url: details.url, kind, size, frameId: details.frameId, ad: AD_URL.test(details.url) };
+    const ad = AD_URL.test(details.url) || AD_HOST.test(new URL(details.url).hostname) || AD_HOST.test(details.initiator || '');
+    const item = { url: details.url, kind, size, frameId: details.frameId, ad };
     serial(() => addItem(details.tabId, item)).catch(console.warn);
   },
   { urls: ['http://*/*', 'https://*/*'], types: ['main_frame', 'xmlhttprequest', 'media', 'other'] },
@@ -153,11 +157,22 @@ async function probe(tabId, itemId, url) {
   updateBadge(tabId);
 }
 
-/** Items the user cares about: hide variant playlists that belong to a master playlist. */
+/**
+ * Items the user cares about: hide variant playlists that belong to a master playlist. Tokens in the
+ * query or in a path part ("hdntl=...") can differ between the two, so compare the plain path.
+ */
+function playlistKey(url) {
+  try {
+    const parts = new URL(url).pathname.split('/').filter((p) => p && !p.includes('=') && !p.includes('~'));
+    return parts.slice(-3).join('/');
+  } catch {
+    return url;
+  }
+}
+
 function visibleItems(items) {
-  const strip = (u) => u.split('?')[0];
-  const children = new Set(items.filter((i) => i.master).flatMap((i) => i.children.flatMap((c) => [c, strip(c)])));
-  return items.filter((i) => i.kind !== 'hls' || i.master || !(children.has(i.url) || children.has(strip(i.url))));
+  const children = new Set(items.filter((i) => i.master).flatMap((i) => i.children.map(playlistKey)));
+  return items.filter((i) => i.kind !== 'hls' || i.master || !children.has(playlistKey(i.url)));
 }
 
 const isMain = (i) => i.kind !== 'dash' && !i.other;
@@ -394,7 +409,9 @@ function scanPage() {
   const label = (video) => {
     let node = video;
     for (let i = 0; i < 6 && node; i++, node = node.parentElement) {
-      const own = (node.getAttribute('aria-label') || node.getAttribute('title') || '').trim();
+      const own = (node.getAttribute('aria-label') || node.getAttribute('title') || '')
+        .replace(/^\s*(video ?player|videosoitin|soitin|player)\s*[-–—:|]\s*/i, '')
+        .trim();
       if (own.length > 3 && !generic.test(own)) return own;
       const caption = node.querySelector('figcaption')?.textContent.trim();
       if (caption) return caption;
@@ -423,7 +440,6 @@ function scanPage() {
       height: v.videoHeight,
       area: Math.round(r.width * r.height),
       playing: !v.paused,
-      ad: v.muted && v.loop && !v.controls,
       title: label(v).slice(0, 200),
       thumb: v.poster || grab(v),
     };
@@ -477,12 +493,14 @@ async function scanTab(tabId) {
     const fresh = await getTab(tabId);
     for (const item of visibleItems(fresh.items)) {
       const v = match(item);
-      item.title = v?.title || top.title || '';
-      item.thumb = safeImage(v?.thumb || '') || safeImage(top.image || '');
+      if (AD_TITLE.test(v?.title || '')) item.ad = true;
+      // An ad must never borrow the story's headline or picture.
+      item.title = item.ad ? 'Advertisement' : v?.title || top.title || '';
+      item.thumb = safeImage(v?.thumb || '') || (item.ad ? '' : safeImage(top.image || ''));
       item.playing = Boolean(v?.playing);
       if (v?.width && !item.width) [item.width, item.height] = [v.width, v.height];
-      if (v?.duration && !item.duration) item.duration = v.duration;
-      item.other = item.stale || item.ad || Boolean(v?.ad) || (item.kind === 'file' && !v && !item.size);
+      if (v?.duration && !item.duration && !item.live) item.duration = v.duration;
+      item.other = item.stale || item.ad || (item.kind === 'file' && !v && !item.size);
     }
     // A clip of a few seconds next to a real video is a player intro or an ad, not the story.
     const main = visibleItems(fresh.items).filter((i) => !i.other);

@@ -59,13 +59,13 @@ function describe(item) {
   const short = Math.min(item.width || Infinity, item.height || Infinity);
   if (Number.isFinite(short) && short > 0) bits.push(`${short}p`);
   if (item.width && item.height > item.width) bits.push('vertical');
-  if (item.size) bits.push(`${item.estimated ? '≈ ' : ''}${megabytes(item.size)}`);
+  if (item.size && !item.live) bits.push(`${item.estimated ? '≈ ' : ''}${megabytes(item.size)}`);
   if (!bits.length) bits.push(item.kind === 'file' ? 'Video file' : 'Stream');
   return bits.join(' · ');
 }
 
 function blocked(item) {
-  if (item.kind === 'dash') return 'This stream type is not supported.';
+  if (item.kind === 'dash') return 'This player type (DASH) is not supported.';
   if (item.drm) return 'Copy protected, cannot be saved.';
   if (item.live) return 'Live stream, cannot be saved.';
   return '';
@@ -93,7 +93,8 @@ function thumb(item) {
   } else {
     box.append(placeholder());
   }
-  if (item.duration) box.append(el('span', { className: 'time' }, clock(item.duration)));
+  if (item.live) box.append(el('span', { className: 'time' }, 'LIVE'));
+  else if (item.duration) box.append(el('span', { className: 'time' }, clock(item.duration)));
   return box;
 }
 
