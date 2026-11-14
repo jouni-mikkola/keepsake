@@ -507,7 +507,7 @@ chrome.runtime.onMessage.addListener((msg, sender, sendResponse) => {
     },
     scan: () => scanTab(msg.tabId),
     download: () => startDownload(msg.tabId, msg.itemId),
-    article: () => saveArticle(msg.tabId, msg.mode === 'png' ? 'png' : 'pdf'),
+    article: () => saveArticle(msg.tabId, ['png', 'ipdf'].includes(msg.mode) ? msg.mode : 'pdf'),
     async cancel() {
       chrome.runtime.sendMessage({ target: 'offscreen', type: 'cancel', jobId: msg.jobId }).catch(() => {});
       await setJob(msg.jobId, null);
